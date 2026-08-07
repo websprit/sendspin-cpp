@@ -156,7 +156,9 @@ public:
 
     /// @brief Called by the audio output when it has played audio frames. Thread-safe.
     /// @param frames Number of audio frames played
-    /// @param timestamp Client timestamp in microseconds when the audio will finish playing
+    /// @param timestamp Client timestamp in microseconds when the final frame physically completes
+    /// at the DAC. Include audio already queued in DMA, I2S, driver, and device buffers; callback
+    /// entry time is not sufficient for adaptive sound-card clock correction.
     void notify_audio_played(uint32_t frames, int64_t timestamp);
 
     // ========================================

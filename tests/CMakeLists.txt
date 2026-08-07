@@ -20,7 +20,9 @@ FetchContent_MakeAvailable(googletest)
 # One executable aggregating every test_*.cpp file. gtest_discover_tests still
 # registers the individual TEST() cases with CTest so failures are reported per case.
 add_executable(sendspin_tests
+    test_audio_drift_controller.cpp
     test_audio_stream_info.cpp
+    test_windowed_sinc_resampler.cpp
     test_connection_lifecycle.cpp
     test_time_filter.cpp
     test_protocol.cpp

@@ -200,11 +200,11 @@ Your audio output must report back when audio frames have been played. This feed
 
 ```cpp
 // In your audio output's playback callback (e.g., PortAudio callback):
-player.notify_audio_played(frames_played, current_timestamp_us);
+player.notify_audio_played(frames_played, dac_finish_timestamp_us);
 ```
 
 - `frames_played`: Number of audio frames (not bytes) just played
-- `timestamp`: Client timestamp in microseconds when the audio will finish playing (e.g., from `std::chrono::steady_clock`)
+- `timestamp`: Client monotonic timestamp in microseconds when the reported frames will finish leaving the DAC. Do not pass the callback entry time without adding the device/DMA lead time.
 
 This method is thread-safe and is expected to be called from an audio callback thread.
 
@@ -769,6 +769,9 @@ Configuration passed to `client.add_player()`.
 | `fixed_delay_us` | `int32_t` | `0` | Fixed platform-level delay offset in microseconds (e.g., a known I2S pipeline delay). Applied on top of the user-adjustable static delay. |
 | `initial_static_delay_ms` | `uint16_t` | `0` | Initial value for the user-adjustable static delay in milliseconds. Overridden by the persisted value if a `SendspinPersistenceProvider` is set. |
 | `extra_startup_silence_ms` | `uint16_t` | `50` | Extra silence inserted at stream start, after the first playback notification and before the first decoded chunk reaches the sink. Added on top of the initial-sync priming silence to give the decode pipeline more slack to stay ahead of the sink, preventing the initial-playback stutter caused by the decoder briefly falling behind. Larger values trade a longer startup delay for more underflow protection; set to `0` to disable. |
+| `adaptive_clock.enabled` | `bool` | `true` | Uses DAC completion feedback to drive a PI controller and continuous fixed-point windowed-sinc ASRC. Large discontinuities still use hard synchronization. Set to `false` to retain legacy one-frame soft correction. |
+| `adaptive_clock.maximum_correction_ppm` | `double` | `500.0` | Maximum continuous rate correction. Increase only when measured hardware drift exceeds the default; a wider range also permits larger pitch change. Invalid non-positive values fall back to `500`; the ASRC imposes a hard safety cap of `5000`. |
+| `adaptive_clock.maximum_step_ppm` | `double` | `10.0` | Maximum correction change per 250 ms update. Smaller values react more slowly but make rate changes gentler. Invalid non-positive values fall back to `10`. |
 | `psram_stack` | `bool` | `false` | Allocate sync/decode task stack in PSRAM (ESP-IDF only) |
 | `priority` | `unsigned` | `6` | FreeRTOS priority for the sync/decode task (ESP-IDF only). The default value, `6`, is one above the default `httpd_priority` (`5`). If you customize priorities, keep this above `httpd_priority` so the HTTP server task cannot starve the decoder during the initial burst of encoded audio that fills the buffer at stream start. |
 | `decode_buffer_location` | `MemoryLocation` | `PREFER_EXTERNAL` | Memory placement preference for the decode transfer buffer. `PREFER_EXTERNAL` tries SPIRAM first and falls back to internal RAM; `PREFER_INTERNAL` does the reverse. ESP-IDF only; ignored on host. |

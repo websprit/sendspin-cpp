@@ -123,6 +123,18 @@ struct AudioSupportedFormatObject {
     uint8_t bit_depth;
 };
 
+/// @brief Continuous sound-card clock correction settings for the player role.
+struct AdaptiveAudioClockConfig {
+    /// @brief Enables DAC-feedback PI control and continuous windowed-sinc ASRC.
+    bool enabled{true};
+
+    /// @brief Maximum continuous rate correction in parts per million.
+    double maximum_correction_ppm{500.0};
+
+    /// @brief Maximum correction change at each 250 ms controller update, in ppm.
+    double maximum_step_ppm{10.0};
+};
+
 /// @brief Configuration for the player role
 struct PlayerRoleConfig {
     static constexpr size_t DEFAULT_AUDIO_BUFFER_CAPACITY = 1000000U;  ///< ~1MB default buffer
@@ -139,6 +151,11 @@ struct PlayerRoleConfig {
     /// decode pipeline slack to stay ahead of the sink, preventing the initial-playback stutter.
     /// Larger values trade longer startup latency for more underflow protection; 0 disables.
     uint16_t extra_startup_silence_ms{DEFAULT_EXTRA_STARTUP_SILENCE_MS};
+
+    /// @brief Enables continuous sound-card drift correction using DAC timing feedback, a PI
+    /// controller, and a fixed-point polyphase windowed-sinc resampler. Hard synchronization is
+    /// still used for discontinuities larger than the normal hard-sync threshold.
+    AdaptiveAudioClockConfig adaptive_clock{};
 
     bool psram_stack{false};  ///< Allocate sync task stack in PSRAM (ESP-IDF only)
 

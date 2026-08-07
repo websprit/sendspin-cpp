@@ -42,6 +42,10 @@ Each `test_*.cpp` file covers one unit of cross-platform logic:
 - `test_time_filter.cpp` — `SendspinTimeFilter` invariants (monotonic-timestamp rejection, reset,
   offset round-trip, convergence).
 - `test_audio_stream_info.cpp` — byte/frame/sample/duration conversions.
+- `test_audio_drift_controller.cpp` — DAC endpoint-error direction, PI bounds, slew limiting,
+  deadband, and reset behavior.
+- `test_windowed_sinc_resampler.cpp` — streaming continuity, rate direction, DC gain, reset, and
+  interleaved 16/24/32-bit PCM handling.
 
 These are white-box tests: they include private headers from `src/`, so the test target adds
 `src/` to its include path. To add a new test file, create `test_<unit>.cpp` here and add it to

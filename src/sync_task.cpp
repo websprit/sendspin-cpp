@@ -18,12 +18,14 @@
 #include "constants.h"
 #include "platform/logging.h"
 #include "platform/thread.h"
+#include "platform/time.h"
 #include "player_role_impl.h"
 #include "protocol_messages.h"
 #include "sendspin/client.h"
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 
@@ -271,6 +273,12 @@ SyncTaskState SyncTask::handle_synchronize_audio(SyncContext& sync_context) {
         // Buffer will run out before this chunk is supposed to play - insert silence to fill the
         // gap
         sync_context.hard_syncing = true;
+        if (sync_context.drift_controller) {
+            sync_context.drift_controller->reset();
+        }
+        if (sync_context.resampler) {
+            sync_context.resampler->set_correction_ppm(0.0);
+        }
 
         // Compute silence directly in frames from microseconds (avoids ms truncation)
         uint32_t silence_frames = static_cast<uint32_t>(
@@ -293,6 +301,12 @@ SyncTaskState SyncTask::handle_synchronize_audio(SyncContext& sync_context) {
         // follow-up disturbance smaller than discarding the whole chunk would. Any sub-threshold
         // residual is left for the next chunk's soft sync to absorb.
         sync_context.hard_syncing = true;
+        if (sync_context.drift_controller) {
+            sync_context.drift_controller->reset();
+        }
+        if (sync_context.resampler) {
+            sync_context.resampler->set_correction_ppm(0.0);
+        }
 
         uint32_t late_frames = static_cast<uint32_t>(
             (static_cast<uint64_t>(-raw_error) *
@@ -328,7 +342,13 @@ SyncTaskState SyncTask::handle_synchronize_audio(SyncContext& sync_context) {
             SS_LOGI(TAG, "Regained sync, reporting synchronized");
         }
 
-        if (raw_error > SOFT_SYNC_THRESHOLD_US) {
+        if (this->player_impl_->config.adaptive_clock.enabled && sync_context.drift_controller &&
+            sync_context.resampler) {
+            const double correction_ppm =
+                sync_context.drift_controller->update(raw_error, platform_time_us());
+            sync_context.resampler->set_correction_ppm(correction_ppm);
+            sync_context.release_chunk = true;
+        } else if (raw_error > SOFT_SYNC_THRESHOLD_US) {
             // Slightly behind - add one interpolated frame between the last two decoded frames
             // Playtime estimate is advanced by transfer_audio() when the extra frame is sent
             this->soft_sync_insert_frame(sync_context);
@@ -561,6 +581,29 @@ DecodeResult SyncTask::decode_chunk(SyncContext& sync_context) {
                 sync_context.bytes_per_frame = sync_context.current_stream_info.frames_to_bytes(1);
             }
 
+            if (this->player_impl_->config.adaptive_clock.enabled) {
+                if (!sync_context.resampler ||
+                    sync_context.resampler->channels() != decoded_stream_info.get_channels()) {
+                    sync_context.resampler =
+                        std::make_unique<WindowedSincResampler>(decoded_stream_info.get_channels());
+                } else {
+                    sync_context.resampler->reset();
+                }
+                AudioDriftControllerConfig drift_config;
+                drift_config.maximum_correction_ppm =
+                    std::min(this->player_impl_->config.adaptive_clock.maximum_correction_ppm,
+                             WindowedSincResampler::MAX_CORRECTION_PPM);
+                drift_config.maximum_step_ppm =
+                    this->player_impl_->config.adaptive_clock.maximum_step_ppm;
+                sync_context.drift_controller =
+                    std::make_unique<AudioDriftController>(drift_config);
+                sync_context.asrc_has_origin = false;
+                sync_context.asrc_input_frames = 0;
+            } else {
+                sync_context.resampler.reset();
+                sync_context.drift_controller.reset();
+            }
+
             // Create or resize the decode buffer using the decoder's current required size
             // estimate; some codecs (for example, Opus) may require this to grow later. One extra
             // frame is reserved past the decoded data for soft-sync frame insertion.
@@ -627,6 +670,15 @@ DecodeResult SyncTask::decode_chunk(SyncContext& sync_context) {
         }
         sync_context.decode_buffer->increase_buffer_length(decoded_size);
         sync_context.decoded_timestamp = client_timestamp;
+        if (this->player_impl_->config.adaptive_clock.enabled) {
+            const DecodeResult resample_result =
+                this->apply_adaptive_resampling(sync_context, client_timestamp);
+            if (resample_result != DecodeResult::SUCCESS) {
+                this->encoded_ring_buffer_->return_chunk(sync_context.encoded_entry);
+                sync_context.encoded_entry = nullptr;
+                return resample_result;
+            }
+        }
     }
 
     // Return the encoded entry to the ring buffer
@@ -634,6 +686,127 @@ DecodeResult SyncTask::decode_chunk(SyncContext& sync_context) {
     sync_context.encoded_entry = nullptr;
 
     return DecodeResult::SUCCESS;
+}
+
+DecodeResult SyncTask::apply_adaptive_resampling(SyncContext& sync_context,
+                                                 int64_t input_timestamp) {
+    if (!sync_context.resampler || !sync_context.decode_buffer) {
+        return DecodeResult::SUCCESS;
+    }
+
+    const uint32_t sample_rate = sync_context.current_stream_info.get_sample_rate();
+    const uint8_t channels = sync_context.current_stream_info.get_channels();
+    const size_t bytes_per_sample = sync_context.bytes_per_frame / channels;
+    const uint32_t input_frames =
+        sync_context.current_stream_info.bytes_to_frames(sync_context.decode_buffer->available());
+
+    if (!sync_context.asrc_has_origin) {
+        sync_context.asrc_origin_client_time = input_timestamp;
+        sync_context.asrc_input_frames = 0;
+        sync_context.asrc_has_origin = true;
+    } else {
+        const int64_t input_duration_us = static_cast<int64_t>(
+            std::llround(static_cast<long double>(sync_context.asrc_input_frames) * US_PER_SECOND /
+                         sample_rate));
+        const int64_t expected_timestamp = sync_context.asrc_origin_client_time + input_duration_us;
+        if (std::abs(input_timestamp - expected_timestamp) > HARD_SYNC_THRESHOLD_US) {
+            // A seek, dropped packet, or large clock-filter step creates a new source timeline.
+            // Reset FIR history so samples on opposite sides of the discontinuity are never mixed.
+            sync_context.resampler->reset();
+            if (sync_context.drift_controller) {
+                sync_context.drift_controller->reset();
+            }
+            sync_context.asrc_origin_client_time = input_timestamp;
+            sync_context.asrc_input_frames = 0;
+        } else {
+            // Re-anchor the source timeline on every chunk so later Kalman offset/drift updates
+            // remain visible. The FIR only retains a small look-ahead window, so applying the
+            // newest origin to those frames is both continuous and more accurate than freezing the
+            // client-time conversion at stream start.
+            sync_context.asrc_origin_client_time = input_timestamp - input_duration_us;
+        }
+    }
+
+    const double first_source_frame = sync_context.resampler->next_source_frame();
+    if (!sync_context.resampler->process_pcm(sync_context.decode_buffer->get_buffer_start(),
+                                             input_frames, bytes_per_sample,
+                                             sync_context.resampled_samples)) {
+        SS_LOGE(TAG, "Failed to allocate adaptive resampler working memory");
+        return DecodeResult::ALLOCATION_FAILED;
+    }
+    sync_context.asrc_input_frames += input_frames;
+
+    sync_context.decode_buffer->decrease_buffer_length(sync_context.decode_buffer->available());
+    if (sync_context.resampled_samples.empty()) {
+        return DecodeResult::SKIPPED;
+    }
+
+    const size_t output_bytes = sync_context.resampled_samples.size() * bytes_per_sample;
+    if (output_bytes > sync_context.decode_buffer->capacity() &&
+        !sync_context.decode_buffer->reallocate(output_bytes)) {
+        SS_LOGE(TAG, "Failed to grow decode buffer for adaptive resampling");
+        return DecodeResult::ALLOCATION_FAILED;
+    }
+    uint8_t* destination = sync_context.decode_buffer->get_buffer_end();
+    for (size_t sample = 0; sample < sync_context.resampled_samples.size(); ++sample) {
+        pack_q31_as_audio_sample(sync_context.resampled_samples[sample],
+                                 destination + sample * bytes_per_sample, bytes_per_sample);
+    }
+    sync_context.decode_buffer->increase_buffer_length(output_bytes);
+    sync_context.decoded_timestamp =
+        sync_context.asrc_origin_client_time +
+        static_cast<int64_t>(std::llround(static_cast<long double>(first_source_frame) *
+                                          US_PER_SECOND / sample_rate));
+    return DecodeResult::SUCCESS;
+}
+
+void SyncTask::drain_adaptive_resampler(SyncContext& sync_context) {
+    if (!sync_context.resampler || !sync_context.decode_buffer || !sync_context.asrc_has_origin) {
+        return;
+    }
+
+    // Finish any PCM already generated before appending the FIR tail.
+    while (sync_context.decode_buffer->available() > 0 &&
+           !(this->event_flags_.get() & COMMAND_STOP)) {
+        const size_t bytes_written =
+            sync_context.decode_buffer->transfer_data_to_sink(AUDIO_WRITE_TIMEOUT_MS);
+        this->track_sent_audio(sync_context, bytes_written);
+        if (bytes_written == 0) {
+            return;
+        }
+    }
+
+    if (!sync_context.resampler->drain(sync_context.resampled_samples)) {
+        SS_LOGE(TAG, "Failed to allocate adaptive resampler tail memory");
+        this->event_flags_.set(TASK_ERROR | COMMAND_STOP);
+        return;
+    }
+    if (sync_context.resampled_samples.empty()) {
+        return;
+    }
+    const uint8_t channels = sync_context.current_stream_info.get_channels();
+    const size_t bytes_per_sample = sync_context.bytes_per_frame / channels;
+    const size_t output_bytes = sync_context.resampled_samples.size() * bytes_per_sample;
+    if (output_bytes > sync_context.decode_buffer->capacity() &&
+        !sync_context.decode_buffer->reallocate(output_bytes)) {
+        SS_LOGE(TAG, "Failed to grow decode buffer for adaptive resampler tail");
+        return;
+    }
+    uint8_t* destination = sync_context.decode_buffer->get_buffer_end();
+    for (size_t sample = 0; sample < sync_context.resampled_samples.size(); ++sample) {
+        pack_q31_as_audio_sample(sync_context.resampled_samples[sample],
+                                 destination + sample * bytes_per_sample, bytes_per_sample);
+    }
+    sync_context.decode_buffer->increase_buffer_length(output_bytes);
+    while (sync_context.decode_buffer->available() > 0 &&
+           !(this->event_flags_.get() & COMMAND_STOP)) {
+        const size_t bytes_written =
+            sync_context.decode_buffer->transfer_data_to_sink(AUDIO_WRITE_TIMEOUT_MS);
+        this->track_sent_audio(sync_context, bytes_written);
+        if (bytes_written == 0) {
+            break;
+        }
+    }
 }
 
 bool SyncTask::wait_for_codec_header(SyncContext& sync_context) {
@@ -696,6 +869,15 @@ void SyncTask::apply_stream_clear(SyncContext& sync_context) {
     if (sync_context.decode_buffer != nullptr) {
         sync_context.decode_buffer->decrease_buffer_length(sync_context.decode_buffer->available());
     }
+    if (sync_context.resampler) {
+        sync_context.resampler->reset();
+    }
+    if (sync_context.drift_controller) {
+        sync_context.drift_controller->reset();
+    }
+    sync_context.resampled_samples.clear();
+    sync_context.asrc_has_origin = false;
+    sync_context.asrc_input_frames = 0;
     this->event_flags_.clear(EventGroupBits::COMMAND_STREAM_CLEAR);
 }
 
@@ -731,7 +913,9 @@ void SyncTask::reset_context(SyncContext& sync_context) {
     sync_context.encoded_entry = nullptr;
     sync_context.decoded_timestamp = 0;
     sync_context.new_audio_client_playtime = 0;
+    sync_context.asrc_origin_client_time = 0;
     sync_context.buffered_frames = 0;
+    sync_context.asrc_input_frames = 0;
     sync_context.current_stream_info = AudioStreamInfo{};
     sync_context.bytes_per_frame = sync_context.current_stream_info.frames_to_bytes(1);
     sync_context.release_chunk = false;
@@ -739,7 +923,9 @@ void SyncTask::reset_context(SyncContext& sync_context) {
     sync_context.hard_syncing = true;
     sync_context.aligning = true;
     sync_context.reported_error = false;
+    sync_context.asrc_has_origin = false;
     sync_context.silence_remaining = 0;
+    sync_context.resampled_samples.clear();
 
     // Empty the decode buffer without deallocating
     if (sync_context.decode_buffer) {
@@ -747,6 +933,12 @@ void SyncTask::reset_context(SyncContext& sync_context) {
     }
     if (sync_context.decoder) {
         sync_context.decoder->reset_decoders();
+    }
+    if (sync_context.resampler) {
+        sync_context.resampler->reset();
+    }
+    if (sync_context.drift_controller) {
+        sync_context.drift_controller->reset();
     }
 }
 
@@ -880,14 +1072,21 @@ void SyncTask::thread_entry(void* params) {
         }
 
         SyncTaskState sync_state = SyncTaskState::INITIAL_SYNC;
+        bool stream_ending = false;
 
         // === INNER LOOP: state machine for active stream ===
         while (true) {
             uint32_t flags = this_task->event_flags_.get();
-            if (flags & (COMMAND_STOP | COMMAND_STREAM_END)) {
+            if (flags & COMMAND_STOP) {
                 break;
             }
-            if (flags & COMMAND_STREAM_CLEAR) {
+            if (flags & COMMAND_STREAM_END) {
+                // Text and binary WebSocket messages are dispatched on different paths. Finish
+                // encoded chunks already accepted before draining the FIR tail, so stream/end
+                // cannot cut through a decoded block or leave queued audio behind.
+                stream_ending = true;
+            }
+            if (!stream_ending && (flags & COMMAND_STREAM_CLEAR)) {
                 // Seek within the current stream: discard buffered audio up to the marker, keep the
                 // codec/decoder and playtime accounting, and continue decoding the new audio.
                 // Re-enter at INITIAL_SYNC: if priming had not finished it resumes there; otherwise
@@ -895,6 +1094,17 @@ void SyncTask::thread_entry(void* params) {
                 this_task->discard_to_clear_marker(sync_context);
                 sync_state = SyncTaskState::INITIAL_SYNC;
                 continue;
+            }
+
+            if (stream_ending &&
+                (sync_state == SyncTaskState::LOAD_CHUNK ||
+                 sync_state == SyncTaskState::INITIAL_SYNC) &&
+                (!sync_context.decode_buffer || sync_context.decode_buffer->available() == 0)) {
+                // Do not read farther into the encoded ring: a codec header for a rapid next
+                // stream may already follow this end. Finish only the block already in flight,
+                // then flush the ASRC look-ahead retained from that block.
+                this_task->drain_adaptive_resampler(sync_context);
+                break;
             }
 
             this_task->process_playback_progress(sync_context);

@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include "audio_drift_controller.h"
 #include "audio_ring_buffer.h"
 #include "audio_stream_info.h"
 #include "decoder.h"
@@ -25,6 +26,7 @@
 #include "platform/shadow_slot.h"
 #include "sendspin/player_role.h"
 #include "transfer_buffer.h"
+#include "windowed_sinc_resampler.h"
 
 #include <atomic>
 #include <memory>
@@ -66,11 +68,16 @@ struct SyncContext {
                                                     // spare frame past the decoded data for
                                                     // soft-sync frame insertion
     std::unique_ptr<SendspinDecoder> decoder;
+    std::unique_ptr<AudioDriftController> drift_controller;
+    std::unique_ptr<WindowedSincResampler> resampler;
     AudioRingBufferEntry* encoded_entry{nullptr};
+
+    AudioSampleBuffer resampled_samples;
 
     // 64-bit fields
     int64_t decoded_timestamp{0};  // Timestamp for decoded audio
     int64_t new_audio_client_playtime{0};
+    int64_t asrc_origin_client_time{0};
 
     // size_t fields
     size_t bytes_per_frame{0};
@@ -79,6 +86,7 @@ struct SyncContext {
 
     // 32-bit fields
     uint32_t buffered_frames{0};
+    uint64_t asrc_input_frames{0};
 
     // 8-bit fields
     bool hard_syncing{true};  // Starts true so initial sync uses tight settle threshold
@@ -89,6 +97,7 @@ struct SyncContext {
                           // aligning are expected and do not report the ERROR client state.
     bool reported_error{false};  // True between reporting ERROR and recovering to SYNCHRONIZED;
                                  // edge-triggers the client/state transitions.
+    bool asrc_has_origin{false};
 };
 
 /// @brief Event flag bits used for sync task lifecycle and command signaling
@@ -235,6 +244,14 @@ protected:
 
     /// @brief Decodes the current encoded chunk
     DecodeResult decode_chunk(SyncContext& sync_context);
+
+    /// @brief Replaces decoded PCM with continuously resampled PCM and updates its timestamp.
+    /// @return SUCCESS when output is available, SKIPPED while the FIR needs look-ahead, or
+    /// ALLOCATION_FAILED when the real-time working buffer cannot grow.
+    DecodeResult apply_adaptive_resampling(SyncContext& sync_context, int64_t input_timestamp);
+
+    /// @brief Emits the resampler's finite-stream tail before returning the task to idle.
+    void drain_adaptive_resampler(SyncContext& sync_context);
 
     /// @brief Waits in IDLE for a codec header to arrive in the ring buffer
     /// Discards stale audio chunks. Returns true if a codec header was found.

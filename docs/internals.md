@@ -352,7 +352,7 @@ INITIAL_SYNC ──→ LOAD_CHUNK ──→ SYNCHRONIZE_AUDIO ──→ TRANSFER
 
 **INITIAL_SYNC**: Fills the audio pipeline with silence to prime DMA buffers. Sleeps briefly after sending to let the audio stack start consuming. Once the first playback-progress callback confirms frames were consumed, it queues `extra_startup_silence_ms` of additional silence (see `PlayerRoleConfig`) and drains it before advancing to LOAD_CHUNK. This extra lead gives the decode pipeline slack to stay ahead of the sink at stream start, preventing the initial-playback stutter caused by the decoder briefly falling behind.
 
-**LOAD_CHUNK**: Reads the next encoded chunk from the ring buffer. Waits for time sync if not yet available. Decodes audio via FLAC/Opus/PCM decoder. On a ring-buffer underflow (no chunk ready) **while still aligning** (startup or post-seek), it feeds silence toward the sink to keep the DAC fed while the decode pipeline catches up, instead of letting it run dry; SYNCHRONIZE_AUDIO then re-aligns the next chunk against wherever the silence carried us. In steady state it does **not** fill — an empty buffer there means the stream is winding down, and stuffing silence would pile up in the sink and delay a rapid restart (a genuine underrun instead surfaces as an error in SYNCHRONIZE_AUDIO).
+**LOAD_CHUNK**: Reads the next encoded chunk from the ring buffer. Waits for time sync if not yet available. Decodes audio via FLAC/Opus/PCM decoder. When `adaptive_clock.enabled` is true, decoded PCM then passes through the streaming fixed-point polyphase windowed-sinc ASRC. Its source-frame position is kept on the server-derived timeline, so the small FIR look-ahead does not change the timestamp assigned to the emitted audio. On a ring-buffer underflow (no chunk ready) **while still aligning** (startup or post-seek), it feeds silence toward the sink to keep the DAC fed while the decode pipeline catches up, instead of letting it run dry; SYNCHRONIZE_AUDIO then re-aligns the next chunk against wherever the silence carried us. In steady state it does **not** fill — an empty buffer there means the stream is winding down, and stuffing silence would pile up in the sink and delay a rapid restart (a genuine underrun instead surfaces as an error in SYNCHRONIZE_AUDIO).
 
 **SYNCHRONIZE_AUDIO**: Computes the sync error:
 
@@ -366,11 +366,9 @@ Where `decoded_timestamp` is the server timestamp converted to client time (via 
 |-------------|--------|
 | > +5000 us (or +500 us settling) | **Hard sync ahead**: insert silence frames to fill the gap |
 | < -5000 us (or -500 us settling) | **Hard sync behind**: drop the decoded chunk |
-| +100 to +5000 us | **Soft sync**: insert one interpolated frame near the end (average of last two) |
-| -100 to -5000 us | **Soft sync**: remove last frame (blend into second-to-last) |
-| -100 to +100 us | **Dead zone**: pass audio through unmodified |
+| -5000 to +5000 us | **Adaptive clock**: a deadbanded PI controller converts persistent endpoint error into a slew-limited ASRC correction (default maximum ±500 ppm) |
 
-Hard sync sets a flag that switches to a tighter 500 us settle threshold until the error is small enough to exit hard sync mode.
+Hard sync resets the PI correction to nominal speed and sets a flag that switches to a tighter 500 us settle threshold until the error is small enough to exit hard sync mode. When adaptive correction is disabled, the legacy soft-sync behavior remains available: errors outside the ±100 us dead zone insert or remove one blended frame.
 
 **TRANSFER_AUDIO**: Writes PCM data to the audio sink via `on_audio_write`. If silence was inserted (hard sync ahead), transfers silence first, then re-enters SYNCHRONIZE_AUDIO for the held-back decoded data.
 
@@ -382,7 +380,7 @@ The audio output hardware reports consumed frames via `notify_audio_played()` �
 new_audio_client_playtime = last_finish_timestamp + remaining_buffered_frames_as_microseconds
 ```
 
-This feedback loop is what makes the sync error calculation accurate.
+This feedback loop is what makes the sync error calculation accurate. With adaptive clocking enabled, the same endpoint error drives a PI controller every 250 ms. Positive error requests more output frames; negative error requests fewer. The 32-tap, 128-phase windowed-sinc ASRC applies that correction continuously rather than concentrating it in occasional inserted or removed frames. Coefficients are shared in static storage, while streaming PCM history/output uses the external-memory-preferring platform allocator on ESP.
 
 ## Time Synchronization
 
