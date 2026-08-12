@@ -96,6 +96,24 @@ function(sendspin_configure_host TARGET_LIB SOURCE_DIR)
     find_package(Threads REQUIRED)
     target_link_libraries(${TARGET_LIB} PRIVATE Threads::Threads)
 
+    # DNS-SD server discovery. Bonjour is part of macOS. Linux uses Avahi's
+    # Bonjour compatibility package (libavahi-compat-libdnssd-dev).
+    if(APPLE)
+        target_compile_definitions(${TARGET_LIB} PRIVATE SENDSPIN_HAS_DNSSD=1)
+    else()
+        find_path(SENDSPIN_DNSSD_INCLUDE_DIR dns_sd.h)
+        find_library(SENDSPIN_DNSSD_LIBRARY dns_sd)
+        if(SENDSPIN_DNSSD_INCLUDE_DIR AND SENDSPIN_DNSSD_LIBRARY)
+            target_include_directories(${TARGET_LIB} PRIVATE ${SENDSPIN_DNSSD_INCLUDE_DIR})
+            target_link_libraries(${TARGET_LIB} PRIVATE ${SENDSPIN_DNSSD_LIBRARY})
+            target_compile_definitions(${TARGET_LIB} PRIVATE SENDSPIN_HAS_DNSSD=1)
+            message(STATUS "Sendspin mDNS discovery enabled (${SENDSPIN_DNSSD_LIBRARY})")
+        else()
+            message(STATUS "Sendspin mDNS discovery unavailable; install "
+                           "libavahi-compat-libdnssd-dev on Linux")
+        endif()
+    endif()
+
     # =========================================================================
     # clang-tidy integration (opt-in via -DENABLE_CLANG_TIDY=ON)
     # Set only on this target so _deps are never analyzed.

@@ -23,6 +23,9 @@ function(sendspin_get_sources BASE_DIR)
         # Client orchestration
         ${BASE_DIR}/src/client.cpp
 
+        # Server discovery public facade
+        ${BASE_DIR}/src/server_discovery.cpp
+
         PARENT_SCOPE
     )
 
@@ -74,6 +77,7 @@ function(sendspin_get_sources BASE_DIR)
         ${BASE_DIR}/src/esp/client_connection.cpp
         ${BASE_DIR}/src/esp/ws_server.cpp
         ${BASE_DIR}/src/esp/network_info.cpp
+        ${BASE_DIR}/src/esp/server_discovery.cpp
 
         PARENT_SCOPE
     )
@@ -84,6 +88,7 @@ function(sendspin_get_sources BASE_DIR)
         ${BASE_DIR}/src/host/server_connection.cpp
         ${BASE_DIR}/src/host/client_connection.cpp
         ${BASE_DIR}/src/host/network_info.cpp
+        ${BASE_DIR}/src/host/server_discovery.cpp
 
         PARENT_SCOPE
     )

@@ -25,12 +25,11 @@
 ///   -f FORMAT Audio format as codec:rate:bits:channels (repeatable)
 ///   -h        Show usage
 
-#include "tui.h"
-
 #include "sendspin/client.h"
 #include "sendspin/metadata_role.h"
 #include "sendspin/player_role.h"
 #include "sendspin/visualizer_role.h"
+#include "tui.h"
 #ifdef SENDSPIN_HAS_PORTAUDIO
 #include "portaudio_sink.h"
 #endif
@@ -89,10 +88,9 @@ public:
         TXTRecordSetValue(&txt, "path", static_cast<uint8_t>(path.size()), path.c_str());
         TXTRecordSetValue(&txt, "name", static_cast<uint8_t>(name.size()), name.c_str());
 
-        DNSServiceErrorType err =
-            DNSServiceRegister(&service_ref_, 0, 0, name.c_str(), "_sendspin._tcp", nullptr,
-                               nullptr, htons(port), TXTRecordGetLength(&txt),
-                               TXTRecordGetBytesPtr(&txt), nullptr, nullptr);
+        DNSServiceErrorType err = DNSServiceRegister(
+            &service_ref_, 0, 0, name.c_str(), "_sendspin._tcp", nullptr, nullptr, htons(port),
+            TXTRecordGetLength(&txt), TXTRecordGetBytesPtr(&txt), nullptr, nullptr);
 
         TXTRecordDeallocate(&txt);
 
@@ -119,8 +117,8 @@ public:
     }
 
     bool start() {
-        DNSServiceErrorType err = DNSServiceBrowse(&browse_ref_, 0, 0, "_sendspin._tcp", nullptr,
-                                                   browse_callback, this);
+        DNSServiceErrorType err = DNSServiceBrowse(&browse_ref_, 0, 0, "_sendspin-server._tcp",
+                                                   nullptr, browse_callback, this);
         if (err != kDNSServiceErr_NoError) {
             return false;
         }
@@ -168,8 +166,10 @@ private:
         std::string domain;
 
         bool operator<(const ServiceKey& o) const {
-            if (name != o.name) return name < o.name;
-            if (regtype != o.regtype) return regtype < o.regtype;
+            if (name != o.name)
+                return name < o.name;
+            if (regtype != o.regtype)
+                return regtype < o.regtype;
             return domain < o.domain;
         }
     };
@@ -201,7 +201,8 @@ private:
                 int fd = DNSServiceRefSockFD(ref);
                 if (fd >= 0) {
                     FD_SET(fd, &read_fds);
-                    if (fd > max_fd) max_fd = fd;
+                    if (fd > max_fd)
+                        max_fd = fd;
                 }
             }
 
@@ -234,10 +235,11 @@ private:
     }
 
     static void DNSSD_API browse_callback(DNSServiceRef /*ref*/, DNSServiceFlags flags,
-                                           uint32_t interface_index, DNSServiceErrorType error,
-                                           const char* name, const char* regtype,
-                                           const char* domain, void* context) {
-        if (error != kDNSServiceErr_NoError) return;
+                                          uint32_t interface_index, DNSServiceErrorType error,
+                                          const char* name, const char* regtype, const char* domain,
+                                          void* context) {
+        if (error != kDNSServiceErr_NoError)
+            return;
         auto* browser = static_cast<MdnsBrowser*>(context);
 
         ServiceKey key{name, regtype, domain};
@@ -247,8 +249,8 @@ private:
             auto* ctx = new ResolveContext{browser, key, name, 0, ""};
 
             DNSServiceRef resolve_ref = nullptr;
-            DNSServiceErrorType err = DNSServiceResolve(
-                &resolve_ref, 0, interface_index, name, regtype, domain, resolve_callback, ctx);
+            DNSServiceErrorType err = DNSServiceResolve(&resolve_ref, 0, interface_index, name,
+                                                        regtype, domain, resolve_callback, ctx);
             if (err == kDNSServiceErr_NoError) {
                 browser->add_resolve_ref(resolve_ref);
             } else {
@@ -262,10 +264,10 @@ private:
     }
 
     static void DNSSD_API resolve_callback(DNSServiceRef ref, DNSServiceFlags /*flags*/,
-                                            uint32_t /*interface_index*/, DNSServiceErrorType error,
-                                            const char* /*fullname*/, const char* hosttarget,
-                                            uint16_t port, uint16_t txt_len,
-                                            const unsigned char* txt_record, void* context) {
+                                           uint32_t /*interface_index*/, DNSServiceErrorType error,
+                                           const char* /*fullname*/, const char* hosttarget,
+                                           uint16_t port, uint16_t txt_len,
+                                           const unsigned char* txt_record, void* context) {
         auto* ctx = static_cast<ResolveContext*>(context);
 
         if (error != kDNSServiceErr_NoError) {
@@ -279,8 +281,7 @@ private:
 
         // Extract "path" from TXT record
         uint8_t path_len = 0;
-        const void* path_val =
-            TXTRecordGetValuePtr(txt_len, txt_record, "path", &path_len);
+        const void* path_val = TXTRecordGetValuePtr(txt_len, txt_record, "path", &path_len);
         if (path_val != nullptr && path_len > 0) {
             ctx->path = std::string(static_cast<const char*>(path_val), path_len);
         }
@@ -292,7 +293,7 @@ private:
         // Resolve the hostname to an IP address using POSIX getaddrinfo.
         // DNSServiceGetAddrInfo is a Bonjour extension not available in Avahi on Linux.
         std::thread([ctx, host = std::string(hosttarget)]() {
-            struct addrinfo hints {};
+            struct addrinfo hints{};
             hints.ai_family = AF_INET;
             hints.ai_socktype = SOCK_STREAM;
 
@@ -396,9 +397,11 @@ static void print_usage(const char* prog) {
     fprintf(stderr, "Usage: %s [options] [name]\n", prog);
     fprintf(stderr, "  name          Friendly name (default: \"TUI Client\")\n\n");
     fprintf(stderr, "Options:\n");
-    fprintf(stderr, "  -u URL        Connect to a WebSocket URL (e.g. ws://192.168.1.10:8928/sendspin)\n");
+    fprintf(stderr,
+            "  -u URL        Connect to a WebSocket URL (e.g. ws://192.168.1.10:8928/sendspin)\n");
     fprintf(stderr, "  -p PORT       Listen on PORT (default: %u)\n", DEFAULT_SENDSPIN_PORT);
-    fprintf(stderr, "  -f FORMAT     Audio format as codec:rate:bits:channels (e.g. flac:48000:24:2)\n");
+    fprintf(stderr,
+            "  -f FORMAT     Audio format as codec:rate:bits:channels (e.g. flac:48000:24:2)\n");
     fprintf(stderr, "                Can be specified multiple times. Codecs: flac, opus, pcm\n");
     fprintf(stderr, "  -V            Disable visualizer\n");
     fprintf(stderr, "  -h            Show this help\n");
@@ -465,8 +468,7 @@ int main(int argc, char* argv[]) {
     if (!audio_formats.empty()) {
         for (const auto& fmt : audio_formats) {
             if (!PortAudioSink::is_format_supported(fmt.sample_rate, fmt.channels, fmt.bit_depth)) {
-                fprintf(stderr,
-                        "Audio format not supported by output device: %uHz %uch %ubit\n",
+                fprintf(stderr, "Audio format not supported by output device: %uHz %uch %ubit\n",
                         fmt.sample_rate, fmt.channels, fmt.bit_depth);
                 return 1;
             }
@@ -483,7 +485,9 @@ int main(int argc, char* argv[]) {
         static constexpr uint32_t SAMPLE_RATES[] = {44100, 48000, 88200, 96000};
         static constexpr uint8_t BIT_DEPTHS[] = {16, 24, 32};
         static constexpr SendspinCodecFormat CODECS[] = {
-            SendspinCodecFormat::FLAC, SendspinCodecFormat::OPUS, SendspinCodecFormat::PCM,
+            SendspinCodecFormat::FLAC,
+            SendspinCodecFormat::OPUS,
+            SendspinCodecFormat::PCM,
         };
 
         for (uint32_t rate : SAMPLE_RATES) {
@@ -707,8 +711,7 @@ int main(int argc, char* argv[]) {
             state.vis_peak_freq = frequency_hz;
         }
 
-        void on_spectrum(int64_t /*client_timestamp*/,
-                         const std::vector<uint16_t>& bins) override {
+        void on_spectrum(int64_t /*client_timestamp*/, const std::vector<uint16_t>& bins) override {
             std::lock_guard<std::mutex> lock(state.mutex);
             state.vis_spectrum = bins;
         }
@@ -730,7 +733,9 @@ int main(int argc, char* argv[]) {
 #endif
 
     struct HostNetworkProvider : SendspinNetworkProvider {
-        bool is_network_ready() override { return true; }
+        bool is_network_ready() override {
+            return true;
+        }
     };
 
     // Shared TUI state
@@ -787,9 +792,8 @@ int main(int argc, char* argv[]) {
                 url_tmp = url_tmp.substr(scheme_end + 3);
             }
             auto path_start = url_tmp.find('/');
-            std::string host_port = (path_start != std::string::npos)
-                                        ? url_tmp.substr(0, path_start)
-                                        : url_tmp;
+            std::string host_port =
+                (path_start != std::string::npos) ? url_tmp.substr(0, path_start) : url_tmp;
             auto colon = host_port.rfind(':');
             if (colon != std::string::npos) {
                 state.connected_host = host_port.substr(0, colon);
@@ -841,9 +845,11 @@ int main(int argc, char* argv[]) {
                 // Find max for normalization (floor at 8192 to avoid over-amplification)
                 uint16_t max_val = 1;
                 for (auto v : state.vis_spectrum) {
-                    if (v > max_val) max_val = v;
+                    if (v > max_val)
+                        max_val = v;
                 }
-                if (max_val < 8192) max_val = 8192;
+                if (max_val < 8192)
+                    max_val = 8192;
                 float norm = 1.0f / static_cast<float>(max_val);
 
                 for (size_t i = 0; i < state.vis_spectrum.size(); ++i) {
