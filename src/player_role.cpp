@@ -220,8 +220,9 @@ void PlayerRole::Impl::build_state_fields(ClientStateMessage& msg) const {
     bool adjustable = this->static_delay_adjustable.load(std::memory_order_relaxed);
     player_state.static_delay_ms =
         adjustable ? this->static_delay_ms.load(std::memory_order_relaxed) : 0;
+    player_state.supported_commands = {SendspinPlayerCommand::VOLUME, SendspinPlayerCommand::MUTE};
     if (adjustable) {
-        player_state.supported_commands = {SendspinPlayerCommand::SET_STATIC_DELAY};
+        player_state.supported_commands.push_back(SendspinPlayerCommand::SET_STATIC_DELAY);
     }
     msg.player = player_state;
 }
