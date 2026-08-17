@@ -34,16 +34,20 @@ namespace sendspin {
 /// @param stack_size Stack size in bytes.
 /// @param priority FreeRTOS task priority.
 /// @param stack_in_psram If true, allocates the stack in PSRAM.
-inline void platform_configure_thread(const char* name, size_t stack_size, int priority,
+/// @return true when ESP-IDF accepts the configuration.
+inline bool platform_configure_thread(const char* name, size_t stack_size, int priority,
                                       bool stack_in_psram) {
     esp_pthread_cfg_t cfg = esp_pthread_get_default_config();
     cfg.stack_size = stack_size;
     cfg.prio = priority;
     cfg.thread_name = name;
     if (stack_in_psram) {
-        cfg.stack_alloc_caps = MALLOC_CAP_SPIRAM;
+        // ESP-IDF requires every pthread stack capability mask to include
+        // MALLOC_CAP_8BIT. Omitting it makes esp_pthread_set_cfg() reject the
+        // entire configuration, silently falling back to the small default stack.
+        cfg.stack_alloc_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
     }
-    esp_pthread_set_cfg(&cfg);
+    return esp_pthread_set_cfg(&cfg) == ESP_OK;
 }
 
 }  // namespace sendspin
@@ -57,9 +61,10 @@ namespace sendspin {
 /// @param stack_size Ignored on host.
 /// @param priority Ignored on host.
 /// @param stack_in_psram Ignored on host.
-inline void platform_configure_thread(const char* /*name*/, size_t /*stack_size*/, int /*priority*/,
+/// @return Always true on host.
+inline bool platform_configure_thread(const char* /*name*/, size_t /*stack_size*/, int /*priority*/,
                                       bool /*stack_in_psram*/) {
-    // No-op on host - std::thread uses OS defaults.
+    return true;  // Host std::thread uses OS defaults.
 }
 
 }  // namespace sendspin

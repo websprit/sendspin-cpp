@@ -181,7 +181,8 @@ bool PlayerRole::Impl::start() {
             SS_LOGE(TAG, "Failed to initialize sync task");
             return false;
         }
-        if (!this->sync_task->start(this->config.psram_stack, this->config.priority)) {
+        if (!this->sync_task->start(this->config.psram_stack, this->config.priority,
+                                    this->config.stack_size_bytes)) {
             SS_LOGE(TAG, "Failed to start sync task thread");
             return false;
         }

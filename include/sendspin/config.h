@@ -159,6 +159,12 @@ struct PlayerRoleConfig {
 
     bool psram_stack{false};  ///< Allocate sync task stack in PSRAM (ESP-IDF only)
 
+    /// @brief Stack size for the sync/decode task in bytes (ESP-IDF only).
+    ///
+    /// The default covers lightweight sinks. Board audio drivers that add a deeper codec/I2S
+    /// call chain can raise this without increasing the stack cost for smaller ESP targets.
+    size_t stack_size_bytes{6192};
+
     /// @brief Default FreeRTOS priority for the sync/decode task (ESP-IDF only).
     /// One above SendspinClientConfig::DEFAULT_HTTPD_PRIORITY so the httpd server task
     /// cannot starve the decoder during the initial burst of incoming encoded audio that

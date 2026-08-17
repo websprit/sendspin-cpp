@@ -173,8 +173,11 @@ bool VisualizerRole::Impl::start() {
         return false;
     }
 
-    platform_configure_thread("SsVis", 4096, static_cast<int>(this->config.priority),
-                              this->config.psram_stack);
+    if (!platform_configure_thread("SsVis", 4096, static_cast<int>(this->config.priority),
+                                   this->config.psram_stack)) {
+        SS_LOGE(TAG, "Invalid visualizer thread configuration");
+        return false;
+    }
     this->drain_task->drain_thread = std::thread(drain_thread_func, this);
     return true;
 }

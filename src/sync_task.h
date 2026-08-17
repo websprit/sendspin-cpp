@@ -136,8 +136,10 @@ public:
     /// @brief Creates and starts the persistent sync background thread
     /// Call once after init(). The thread idles until a codec header arrives in the ring buffer.
     /// @param task_stack_in_psram Whether to allocate the task stack in PSRAM (ESP-IDF only).
+    /// @param priority FreeRTOS task priority (ESP-IDF only).
+    /// @param stack_size_bytes Task stack size in bytes (ESP-IDF only).
     /// @return true if thread started successfully, false otherwise.
-    bool start(bool task_stack_in_psram, unsigned priority);
+    bool start(bool task_stack_in_psram, unsigned priority, size_t stack_size_bytes);
 
     /// @brief Returns true if init() has been called successfully
     /// @return true if the sync task has been initialized, false otherwise.

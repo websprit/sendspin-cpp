@@ -42,8 +42,6 @@ static constexpr int64_t SOFT_SYNC_THRESHOLD_US = 100;
 
 static constexpr uint32_t INITIAL_SYNC_ZEROS_DURATION_MS = 25;
 
-static constexpr size_t SYNC_TASK_STACK_SIZE = 6192;  // Opus uses more stack than FLAC
-
 /// @brief Wait time (ms) between retries when time sync is not yet available
 static constexpr uint32_t WAIT_FOR_TIME_SYNC_MS = 15U;
 
@@ -112,7 +110,7 @@ bool SyncTask::init(PlayerRole::Impl* player_impl, SendspinClient* client, size_
     return true;
 }
 
-bool SyncTask::start(bool task_stack_in_psram, unsigned priority) {
+bool SyncTask::start(bool task_stack_in_psram, unsigned priority, size_t stack_size_bytes) {
     if (!this->is_initialized()) {
         SS_LOGE(TAG, "Sync task not initialized (call init() first or set audio sink)");
         return false;
@@ -128,8 +126,11 @@ bool SyncTask::start(bool task_stack_in_psram, unsigned priority) {
                              EventGroupBits::COMMAND_STREAM_END |
                              EventGroupBits::COMMAND_STREAM_CLEAR | EventGroupBits::COMMAND_START);
 
-    platform_configure_thread("Sendspin", SYNC_TASK_STACK_SIZE, static_cast<int>(priority),
-                              task_stack_in_psram);
+    if (!platform_configure_thread("Sendspin", stack_size_bytes, static_cast<int>(priority),
+                                   task_stack_in_psram)) {
+        SS_LOGE(TAG, "Invalid sync task thread configuration");
+        return false;
+    }
 
     this->sync_thread_ = std::thread(thread_entry, this);
 
