@@ -40,6 +40,8 @@ class SendspinClient;
 struct PlaybackProgress {
     uint32_t frames_played;    // Number of audio frames played since last progress update
     int64_t finish_timestamp;  // The timestamp when the audio frames should finish playing
+    PlayoutClockQuality quality{PlayoutClockQuality::ESTIMATED};
+    bool underrun{false};
 };
 
 /// @brief States of the sync task's inner decode/playback loop
@@ -78,6 +80,7 @@ struct SyncContext {
     int64_t decoded_timestamp{0};  // Timestamp for decoded audio
     int64_t new_audio_client_playtime{0};
     int64_t asrc_origin_client_time{0};
+    int64_t last_playout_finish_timestamp{0};
 
     // size_t fields
     size_t bytes_per_frame{0};
@@ -195,6 +198,14 @@ public:
     /// @param timestamp Client timestamp when the audio finished playing.
     void notify_audio_played(uint32_t frames, int64_t timestamp);
 
+    /// @brief Called by the audio output with structured timing quality/source information.
+    /// Thread-safe: may be called from any context.
+    /// @param observation Platform-neutral playout timing observation.
+    void notify_playout_observed(const PlayoutObservation& observation);
+
+    /// @brief Returns the current playout observation generation.
+    uint32_t playout_generation() const;
+
 protected:
     /// @brief Entry point for the persistent sync background thread
     /// @param params Pointer to the owning SyncTask instance.
@@ -289,6 +300,7 @@ protected:
     // Latest-wins slot that merges (sum frames, keep latest finish_timestamp)
     // updates from the audio callback and is drained by the sync thread.
     ShadowSlot<PlaybackProgress> playback_progress_slot_;
+    std::atomic<uint32_t> playout_generation_{0};
     std::thread sync_thread_;
 
     // Pointer fields

@@ -163,6 +163,19 @@ else()
     # Host build options
     option(ENABLE_WERROR "Treat warnings as errors" OFF)
     option(ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+    option(SENDSPIN_BUILD_ALSA_ADAPTER
+           "Build the optional Linux/RK3308 ALSA playout adapter" OFF)
+
+    if(SENDSPIN_BUILD_ALSA_ADAPTER)
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(ALSA REQUIRED IMPORTED_TARGET alsa)
+        add_library(sendspin_alsa_playout_adapter STATIC
+            examples/common/alsa_playout_adapter.cpp)
+        target_include_directories(sendspin_alsa_playout_adapter PUBLIC examples/common)
+        target_link_libraries(sendspin_alsa_playout_adapter PUBLIC sendspin PkgConfig::ALSA)
+        target_compile_features(sendspin_alsa_playout_adapter PUBLIC cxx_std_20)
+        target_compile_options(sendspin_alsa_playout_adapter PRIVATE -Wall -Wextra)
+    endif()
 
     # Examples build by default for standalone development, but not when sendspin is pulled into
     # a larger project via add_subdirectory (where the consumer doesn't want the example deps,

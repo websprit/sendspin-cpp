@@ -497,7 +497,7 @@ private:
 #endif
 
     // 32-bit fields
-    SendspinClientState state_{SendspinClientState::SYNCHRONIZED};
+    SendspinClientState state_{SendspinClientState::SYNCHRONIZING};
 
     // 8-bit fields
     bool high_performance_held_for_time_{false};

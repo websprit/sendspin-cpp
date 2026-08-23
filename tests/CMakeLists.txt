@@ -27,6 +27,7 @@ add_executable(sendspin_tests
     test_time_filter.cpp
     test_protocol.cpp
     test_player_role.cpp
+    test_playout_observation.cpp
     test_network_info.cpp
     test_spsc_ring_buffer.cpp
     test_inbox.cpp

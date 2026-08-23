@@ -29,6 +29,7 @@ namespace sendspin {
 
 /// @brief Client playback state reported to the server
 enum class SendspinClientState : uint8_t {
+    SYNCHRONIZING,    // Client is aligning its local audio timeline to the server
     SYNCHRONIZED,     // Client is synchronized and playing from the server
     ERROR,            // Client encountered a playback error
     EXTERNAL_SOURCE,  // Client is playing from a non-Sendspin source

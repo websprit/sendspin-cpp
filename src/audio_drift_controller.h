@@ -25,7 +25,7 @@ struct AudioDriftControllerConfig {
     static constexpr int64_t DEFAULT_DEADBAND_US = 100;
     static constexpr int64_t DEFAULT_UPDATE_INTERVAL_US = 250000;
     double proportional_gain{2000.0};
-    double integral_gain{200.0};
+    double integral_gain{1000.0};
     double maximum_correction_ppm{500.0};
     double maximum_step_ppm{10.0};
     int64_t deadband_us{DEFAULT_DEADBAND_US};

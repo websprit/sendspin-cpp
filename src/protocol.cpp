@@ -907,10 +907,10 @@ std::string format_client_state_message(const ClientStateMessage* msg) {
     JsonObject root = doc.to<JsonObject>();
 
     root["type"] = "client/state";
-    root["payload"]["state"] = to_cstr(msg->state);
 
     if (msg->player.has_value()) {
         const ClientPlayerStateObject& player_state = msg->player.value();
+        root["payload"]["player"]["state"] = to_cstr(player_state.state);
         root["payload"]["player"]["volume"] = player_state.volume;
         root["payload"]["player"]["muted"] = player_state.muted;
         root["payload"]["player"]["static_delay_ms"] = player_state.static_delay_ms;

@@ -32,6 +32,7 @@
 #include "tui.h"
 #ifdef SENDSPIN_HAS_PORTAUDIO
 #include "portaudio_sink.h"
+#include "playout_observation_utils.h"
 #endif
 
 #include <getopt.h>
@@ -562,8 +563,10 @@ int main(int argc, char* argv[]) {
         PlayerRole& player;
 #ifdef SENDSPIN_HAS_PORTAUDIO
         PortAudioSink& sink;
-        TuiPlayerListener(TuiState& s, PlayerRole& p, PortAudioSink& a)
-            : state(s), player(p), sink(a) {}
+        SendspinExamplePlayoutObserver& playout_observer;
+        TuiPlayerListener(TuiState& s, PlayerRole& p, PortAudioSink& a,
+                          SendspinExamplePlayoutObserver& observer)
+            : state(s), player(p), sink(a), playout_observer(observer) {}
 #else
         TuiPlayerListener(TuiState& s, PlayerRole& p) : state(s), player(p) {}
 #endif
@@ -587,6 +590,7 @@ int main(int argc, char* argv[]) {
                 state.streaming = true;
             }
 #ifdef SENDSPIN_HAS_PORTAUDIO
+            playout_observer.reset_for_stream();
             auto& params = player.get_current_stream_params();
             if (params.sample_rate.has_value() && params.channels.has_value() &&
                 params.bit_depth.has_value()) {
@@ -743,9 +747,10 @@ int main(int argc, char* argv[]) {
 
     // Create and wire listeners
 #ifdef SENDSPIN_HAS_PORTAUDIO
-    TuiPlayerListener player_listener(state, player, audio_sink);
-    audio_sink.on_frames_played = [&player](uint32_t frames, int64_t timestamp) {
-        player.notify_audio_played(frames, timestamp);
+    SendspinExamplePlayoutObserver playout_observer(player);
+    TuiPlayerListener player_listener(state, player, audio_sink, playout_observer);
+    audio_sink.on_frames_played = [&playout_observer](uint32_t frames, int64_t timestamp) {
+        playout_observer.notify_portaudio_played(frames, timestamp);
     };
 #else
     TuiPlayerListener player_listener(state, player);

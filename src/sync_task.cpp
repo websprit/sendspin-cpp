@@ -179,6 +179,24 @@ bool SyncTask::write_audio_chunk(const uint8_t* data, size_t data_size, int64_t 
 }
 
 void SyncTask::notify_audio_played(uint32_t frames, int64_t timestamp) {
+    const uint32_t generation = this->playout_generation_.load(std::memory_order_acquire);
+    this->notify_playout_observed(PlayoutObservation{
+        .generation = generation,
+        .frames_played = frames,
+        .observed_at_us = platform_time_us(),
+        .finish_timestamp_us = timestamp,
+        .error_bound_us = -1,
+        .source = PlayoutClockSource::ESTIMATED,
+        .quality = PlayoutClockQuality::ESTIMATED,
+        .underrun = false,
+    });
+}
+
+void SyncTask::notify_playout_observed(const PlayoutObservation& observation) {
+    if (observation.generation != this->playout_generation_.load(std::memory_order_acquire)) {
+        return;
+    }
+
     // Merge into the shadow slot: sum frames across unread updates and keep
     // the most recent finish_timestamp. The sync thread drains on each inner
     // loop iteration.
@@ -186,8 +204,15 @@ void SyncTask::notify_audio_played(uint32_t frames, int64_t timestamp) {
         [](PlaybackProgress& current, PlaybackProgress&& delta) {
             current.frames_played += delta.frames_played;
             current.finish_timestamp = delta.finish_timestamp;
+            current.quality = delta.quality;
+            current.underrun = current.underrun || delta.underrun;
         },
-        PlaybackProgress{frames, timestamp});
+        PlaybackProgress{observation.frames_played, observation.finish_timestamp_us,
+                         observation.quality, observation.underrun});
+}
+
+uint32_t SyncTask::playout_generation() const {
+    return this->playout_generation_.load(std::memory_order_acquire);
 }
 
 // ============================================================================
@@ -336,11 +361,12 @@ SyncTaskState SyncTask::handle_synchronize_audio(SyncContext& sync_context) {
 
         // First in-tolerance alignment completes initial-sync/post-seek alignment. If we had
         // reported a sync error, we have now recovered: report SYNCHRONIZED.
+        const bool was_aligning = sync_context.aligning;
         sync_context.aligning = false;
-        if (sync_context.reported_error) {
+        if (was_aligning || sync_context.reported_error) {
             sync_context.reported_error = false;
             this->player_impl_->enqueue_state_update(SendspinClientState::SYNCHRONIZED);
-            SS_LOGI(TAG, "Regained sync, reporting synchronized");
+            SS_LOGI(TAG, "Audio timeline aligned, reporting synchronized");
         }
 
         if (this->player_impl_->config.adaptive_clock.enabled && sync_context.drift_controller &&
@@ -915,6 +941,7 @@ void SyncTask::reset_context(SyncContext& sync_context) {
     sync_context.decoded_timestamp = 0;
     sync_context.new_audio_client_playtime = 0;
     sync_context.asrc_origin_client_time = 0;
+    sync_context.last_playout_finish_timestamp = 0;
     sync_context.buffered_frames = 0;
     sync_context.asrc_input_frames = 0;
     sync_context.current_stream_info = AudioStreamInfo{};
@@ -946,7 +973,29 @@ void SyncTask::reset_context(SyncContext& sync_context) {
 void SyncTask::process_playback_progress(SyncContext& sync_context) {
     PlaybackProgress playback_progress{};
     if (this->playback_progress_slot_.take(playback_progress)) {
+        if (playback_progress.finish_timestamp < sync_context.last_playout_finish_timestamp) {
+            SS_LOGW(TAG, "Ignoring regressing playout timestamp");
+            return;
+        }
+        sync_context.last_playout_finish_timestamp = playback_progress.finish_timestamp;
         uint32_t frames_played = playback_progress.frames_played;
+
+        if (playback_progress.underrun) {
+            sync_context.buffered_frames = 0;
+            sync_context.new_audio_client_playtime = playback_progress.finish_timestamp;
+            sync_context.aligning = true;
+            sync_context.hard_syncing = true;
+            sync_context.reported_error = true;
+            if (sync_context.drift_controller) {
+                sync_context.drift_controller->reset();
+            }
+            if (sync_context.resampler) {
+                sync_context.resampler->set_correction_ppm(0.0);
+            }
+            this->player_impl_->enqueue_state_update(SendspinClientState::ERROR);
+            SS_LOGW(TAG, "Audio output underrun, re-entering timeline alignment");
+            return;
+        }
 
         if (sync_context.initial_decode && frames_played) {
             // First audio reached the sink. Queue the extra startup silence (replacing any unsent
@@ -1009,6 +1058,7 @@ void SyncTask::thread_entry(void* params) {
 
         this_task->reset_context(sync_context);
         this_task->playback_progress_slot_.reset();
+        this_task->playout_generation_.fetch_add(1, std::memory_order_acq_rel);
 
         // Wait for a codec header to arrive in the ring buffer (yields CPU with long timeout)
         bool got_header = this_task->wait_for_codec_header(sync_context);
@@ -1062,10 +1112,9 @@ void SyncTask::thread_entry(void* params) {
         // buffer from the old stream, and those callbacks would corrupt the new stream's
         // buffered_frames tracking.
         this_task->playback_progress_slot_.reset();
-
         this_task->event_flags_.set(EventGroupBits::TASK_RUNNING);
 
-        this_task->player_impl_->enqueue_state_update(SendspinClientState::SYNCHRONIZED);
+        this_task->player_impl_->enqueue_state_update(SendspinClientState::SYNCHRONIZING);
 
         // Decode the initial codec header
         if (sync_context.encoded_entry != nullptr) {

@@ -171,6 +171,8 @@ inline std::optional<SendspinConnectionReason> connection_reason_from_string(
 
 inline const char* to_cstr(SendspinClientState state) {
     switch (state) {
+        case SendspinClientState::SYNCHRONIZING:
+            return "synchronizing";
         case SendspinClientState::SYNCHRONIZED:
             return "synchronized";
         case SendspinClientState::EXTERNAL_SOURCE:
@@ -288,6 +290,7 @@ struct PlayerSupportObject {
 
 /// @brief Player state reported by the client to the server in client/state messages
 struct ClientPlayerStateObject {
+    SendspinClientState state{};
     uint8_t volume{};
     bool muted{};
     uint16_t static_delay_ms{};
@@ -623,7 +626,7 @@ struct ClientHelloMessage {
 
 /// @brief Outgoing client/state message reporting client playback state to the server
 struct ClientStateMessage {
-    SendspinClientState state{};
+    SendspinClientState state{SendspinClientState::SYNCHRONIZING};
     std::optional<ClientPlayerStateObject> player{};
 };
 

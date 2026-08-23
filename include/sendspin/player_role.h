@@ -18,6 +18,7 @@
 #pragma once
 
 #include "sendspin/config.h"
+#include "sendspin/playout_observation.h"
 #include "sendspin/types.h"
 
 #include <cstddef>
@@ -159,7 +160,19 @@ public:
     /// @param timestamp Client timestamp in microseconds when the final frame physically completes
     /// at the DAC. Include audio already queued in DMA, I2S, driver, and device buffers; callback
     /// entry time is not sufficient for adaptive sound-card clock correction.
+    /// @note Compatibility path for synchronous/non-stale callbacks. Asynchronous adapters must
+    /// use notify_playout_observed() with the generation captured at stream start.
     void notify_audio_played(uint32_t frames, int64_t timestamp);
+
+    /// @brief Called by a platform audio adapter with structured playout timing. Thread-safe.
+    /// @param observation Platform-neutral timing observation for consumed audio.
+    ///
+    /// Prefer this over notify_audio_played() when the platform can distinguish hardware-backed
+    /// timing from estimated timing, for example ESP32 DMA callbacks or Linux ALSA htimestamp.
+    void notify_playout_observed(const PlayoutObservation& observation);
+
+    /// @brief Returns the current playout observation generation for platform adapters.
+    uint32_t playout_generation() const;
 
     // ========================================
     // State updates

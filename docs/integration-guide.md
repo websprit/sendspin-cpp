@@ -196,17 +196,28 @@ struct MyPlayerListener : PlayerRoleListener {
 
 ### Audio Playback Feedback
 
-Your audio output must report back when audio frames have been played. This feedback drives the library's synchronization. Call `notify_audio_played()` from your audio output callback:
+Your audio output must report back when audio frames have been played. This feedback drives the library's synchronization. When the platform can report timing quality/source, prefer `notify_playout_observed()`:
 
 ```cpp
-// In your audio output's playback callback (e.g., PortAudio callback):
-player.notify_audio_played(frames_played, dac_finish_timestamp_us);
+// Capture/reset the adapter generation from on_stream_start(); do not relabel an old async
+// callback by reading the current generation inside the callback.
+player.notify_playout_observed(sendspin::PlayoutObservation{
+    .generation = adapter_generation,
+    .frames_played = frames_played,
+    .observed_at_us = monotonic_now_us,
+    .finish_timestamp_us = dac_finish_timestamp_us,
+    .error_bound_us = 0,
+    .source = sendspin::PlayoutClockSource::PORTAUDIO_DAC_TIME,
+    .quality = sendspin::PlayoutClockQuality::BOUNDED,
+});
 ```
 
 - `frames_played`: Number of audio frames (not bytes) just played
-- `timestamp`: Client monotonic timestamp in microseconds when the reported frames will finish leaving the DAC. Do not pass the callback entry time without adding the device/DMA lead time.
+- `finish_timestamp_us`: Client monotonic timestamp in microseconds when the reported frames will finish leaving the DAC. Do not pass the callback entry time without adding the device/DMA lead time.
 
-This method is thread-safe and is expected to be called from an audio callback thread.
+`notify_audio_played(frames, timestamp)` remains available for simple estimated callbacks. On Linux/RK3308, use `QueuedPlayoutTracker`: call `submit()` after a successful ALSA write, read ALSA delay/htimestamp into `PlayoutQueueSnapshot`, then pass the resulting observation to `notify_playout_observed()`.
+
+Both notification methods are thread-safe and are expected to be called from an audio callback thread.
 
 ### MetadataRoleListener
 
@@ -629,7 +640,7 @@ Most listener callbacks fire on the main loop thread (the thread calling `client
 | `VisualizerRoleListener` data callbacks (`on_loudness()`, `on_beat()`, `on_f_peak()`, `on_spectrum()`, `on_peak()`) | Dedicated visualizer drain thread |
 | All other listener methods | Main loop thread |
 
-`PlayerRole::notify_audio_played()` is thread-safe and is designed to be called from an audio output callback thread.
+`PlayerRole::notify_playout_observed()` and `PlayerRole::notify_audio_played()` are thread-safe and are designed to be called from an audio output callback thread.
 
 `ArtworkRole::frame_done()` must be called from the main loop thread (typically from inside `on_image_display()`/`on_image_clear()` or when a cross-fade animation completes).
 

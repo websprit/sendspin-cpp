@@ -15,6 +15,8 @@
 #include "audio_drift_controller.h"
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 namespace sendspin {
 namespace {
 
@@ -26,7 +28,7 @@ TEST(AudioDriftController, PositiveEndpointErrorProducesMoreOutputFrames) {
     AudioDriftController controller;
 
     EXPECT_DOUBLE_EQ(controller.update(1000, 0), 0.0);
-    EXPECT_NEAR(controller.update(1000, 250000), -2.05, 0.001);
+    EXPECT_NEAR(controller.update(1000, 250000), -2.25, 0.001);
 }
 
 TEST(AudioDriftController, CorrectionIsSlewLimitedAndBounded) {
@@ -68,6 +70,27 @@ TEST(AudioDriftController, InvalidPublicLimitsFallBackToSafeDefaults) {
 
     controller.update(-100000, 0);
     EXPECT_DOUBLE_EQ(controller.update(-100000, 250000), 10.0);
+}
+
+double simulate_device_drift(double hardware_ppm, int64_t duration_us) {
+    AudioDriftController controller;
+    constexpr int64_t step_us = 250000;
+    double endpoint_error_us = 0.0;
+    double correction_ppm = controller.update(0, 0);
+    for (int64_t now_us = step_us; now_us <= duration_us; now_us += step_us) {
+        const double elapsed_seconds = static_cast<double>(step_us) / 1'000'000.0;
+        endpoint_error_us += (hardware_ppm + correction_ppm) * elapsed_seconds;
+        correction_ppm = controller.update(static_cast<int64_t>(endpoint_error_us), now_us);
+    }
+    return endpoint_error_us;
+}
+
+TEST(AudioDriftController, TwoOppositeHardwareClocksStayWithinSubMillisecondAfterTenMinutes) {
+    const double fast_device_error = simulate_device_drift(40.0, 600'000'000);
+    const double slow_device_error = simulate_device_drift(-35.0, 600'000'000);
+
+    EXPECT_LT(std::abs(fast_device_error - slow_device_error), 500.0)
+        << "fast=" << fast_device_error << " slow=" << slow_device_error;
 }
 
 // NOLINTEND(readability-magic-numbers)

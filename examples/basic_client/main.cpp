@@ -37,6 +37,7 @@
 #include "sendspin/player_role.h"
 #ifdef SENDSPIN_HAS_PORTAUDIO
 #include "portaudio_sink.h"
+#include "playout_observation_utils.h"
 #endif
 
 #include <getopt.h>
@@ -244,7 +245,10 @@ int main(int argc, char* argv[]) {
 #ifdef SENDSPIN_HAS_PORTAUDIO
         PortAudioSink& sink;
         PlayerRole& player;
-        BasicPlayerListener(PortAudioSink& s, PlayerRole& p) : sink(s), player(p) {}
+        SendspinExamplePlayoutObserver& playout_observer;
+        BasicPlayerListener(PortAudioSink& s, PlayerRole& p,
+                            SendspinExamplePlayoutObserver& observer)
+            : sink(s), player(p), playout_observer(observer) {}
 #endif
 
         size_t on_audio_write(uint8_t* data, size_t length, uint32_t timeout_ms) override {
@@ -261,6 +265,7 @@ int main(int argc, char* argv[]) {
         void on_stream_start() override {
             fprintf(stderr, ">>> Stream started\n");
 #ifdef SENDSPIN_HAS_PORTAUDIO
+            playout_observer.reset_for_stream();
             auto& params = player.get_current_stream_params();
             if (params.sample_rate.has_value() && params.channels.has_value() &&
                 params.bit_depth.has_value()) {
@@ -306,9 +311,10 @@ int main(int argc, char* argv[]) {
     };
 
 #ifdef SENDSPIN_HAS_PORTAUDIO
-    BasicPlayerListener player_listener(audio_sink, player);
-    audio_sink.on_frames_played = [&player](uint32_t frames, int64_t timestamp) {
-        player.notify_audio_played(frames, timestamp);
+    SendspinExamplePlayoutObserver playout_observer(player);
+    BasicPlayerListener player_listener(audio_sink, player, playout_observer);
+    audio_sink.on_frames_played = [&playout_observer](uint32_t frames, int64_t timestamp) {
+        playout_observer.notify_portaudio_played(frames, timestamp);
     };
 #else
     BasicPlayerListener player_listener;

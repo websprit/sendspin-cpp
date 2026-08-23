@@ -634,6 +634,27 @@ TEST(Protocol, FormatClientCommandNoArgs) {
     EXPECT_FALSE(doc["payload"]["controller"]["mute"].is<bool>());
 }
 
+TEST(Protocol, FormatClientStateReportsStateInsidePlayerPayload) {
+    ClientStateMessage msg;
+    msg.state = SendspinClientState::SYNCHRONIZING;
+    ClientPlayerStateObject player;
+    player.state = SendspinClientState::SYNCHRONIZING;
+    player.volume = 33;
+    player.muted = true;
+    player.static_delay_ms = 12;
+    player.supported_commands = {SendspinPlayerCommand::VOLUME, SendspinPlayerCommand::MUTE};
+    msg.player = player;
+
+    const std::string out = format_client_state_message(&msg);
+
+    JsonDocument doc;
+    ASSERT_FALSE(deserializeJson(doc, out));
+    EXPECT_STREQ(doc["type"], "client/state");
+    EXPECT_FALSE(doc["payload"]["state"].is<const char*>());
+    EXPECT_STREQ(doc["payload"]["player"]["state"], "synchronizing");
+    EXPECT_EQ(doc["payload"]["player"]["volume"].as<int>(), 33);
+}
+
 // Every device_info identity field (product_name, manufacturer, software_version, mac_address)
 // is optional and serialized only when present.
 TEST(Protocol, FormatClientHelloDeviceInfoFieldsPresent) {

@@ -101,6 +101,19 @@ void PlayerRole::notify_audio_played(uint32_t frames, int64_t timestamp) {
     }
 }
 
+void PlayerRole::notify_playout_observed(const PlayoutObservation& observation) {
+    if (this->impl_->sync_task && this->impl_->sync_task->is_running()) {
+        this->impl_->sync_task->notify_playout_observed(observation);
+    }
+}
+
+uint32_t PlayerRole::playout_generation() const {
+    if (this->impl_->sync_task) {
+        return this->impl_->sync_task->playout_generation();
+    }
+    return 0;
+}
+
 void PlayerRole::update_volume(uint8_t volume) {
     this->impl_->update_volume(volume);
 }
@@ -215,6 +228,7 @@ void PlayerRole::Impl::build_state_fields(ClientStateMessage& msg) const {
     }
 
     ClientPlayerStateObject player_state{};
+    player_state.state = msg.state;
     player_state.volume = this->volume;
     player_state.muted = this->muted;
     bool adjustable = this->static_delay_adjustable.load(std::memory_order_relaxed);

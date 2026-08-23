@@ -5,6 +5,7 @@ function(sendspin_get_sources BASE_DIR)
     set(SENDSPIN_CORE_SOURCES
         # Audio utilities
         ${BASE_DIR}/src/audio_stream_info.cpp
+        ${BASE_DIR}/src/playout_observation.cpp
         ${BASE_DIR}/src/transfer_buffer.cpp
 
         # Protocol
