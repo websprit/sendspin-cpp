@@ -372,6 +372,11 @@ private:
     /// entirely when neither queue has anything pending.
     std::atomic<bool> has_pending_events_{false};
 
+    /// Set before teardown stops transport owners. Callbacks that observe it must return before
+    /// touching manager state; callbacks already in flight are joined by their transport owner
+    /// before the destructor body returns.
+    std::atomic<bool> shutting_down_{false};
+
     /// nursery_.size(), refreshed under conn_ptr_mutex_ immediately after every nursery_
     /// mutation (always re-derived from .size(), never incremented/decremented in place, so it
     /// cannot drift). Lets loop() skip the copies/loop() block, the hello-retry scan, and the

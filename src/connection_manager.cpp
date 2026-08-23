@@ -76,6 +76,8 @@ static const char* to_cstr(SetupStage stage) {
 ConnectionManager::ConnectionManager(SendspinClient* client) : client_(client) {}
 
 ConnectionManager::~ConnectionManager() {
+    this->shutting_down_.store(true, std::memory_order_release);
+    this->ws_server_.reset();
     // Move everything out under the locks, destroy outside them: a connection destructor can join
     // its transport thread (see DeferredRelease), which must not happen while a lock is held.
     // The two mutexes guard disjoint state and are taken in separate scopes, never nested.
@@ -128,14 +130,28 @@ void ConnectionManager::connect_to(const std::string& url) {
         // setup_connection_callbacks. The connect succeeded, so the WebSocket upgrade is complete;
         // record it and defer the hello arming to loop() (this runs on the network thread).
         // Inbound connections arrive already upgraded and arm their hello at admission.
+        if (this->shutting_down_.load(std::memory_order_acquire)) {
+            return;
+        }
         c->mark_ws_upgraded();
+        auto owned = c->weak_from_this().lock();
+        if (!owned) {
+            return;
+        }
         std::lock_guard<std::mutex> lock(this->conn_mutex_);
-        this->queue_pending_connected(c->shared_from_this());
+        this->queue_pending_connected(std::move(owned));
     };
     client_conn->on_disconnected_cb = [this](SendspinConnection* conn) {
         // Defer to loop(); this callback runs on IXWebSocket's internal thread
+        if (this->shutting_down_.load(std::memory_order_acquire)) {
+            return;
+        }
+        auto owned = conn->weak_from_this().lock();
+        if (!owned) {
+            return;
+        }
         std::lock_guard<std::mutex> lock(this->conn_mutex_);
-        this->queue_pending_disconnect(conn->shared_from_this());
+        this->queue_pending_disconnect(std::move(owned));
     };
 
     client_conn->init_time_filter();
@@ -233,11 +249,17 @@ void ConnectionManager::init_server(SendspinClient* client) {
 
     this->ws_server_->set_new_connection_callback(
         [this](std::shared_ptr<SendspinServerConnection> conn) {
+            if (this->shutting_down_.load(std::memory_order_acquire)) {
+                return;
+            }
             this->on_new_connection(std::move(conn));
         });
 
     this->ws_server_->set_connection_closed_callback(
         [this](std::shared_ptr<SendspinServerConnection> conn) {
+            if (this->shutting_down_.load(std::memory_order_acquire)) {
+                return;
+            }
             SS_LOGD(TAG, "Connection closed callback for socket %d", conn->get_sockfd());
             // Defer cleanup to loop() so on_connection_lost runs on the main thread alongside the
             // rest of the connection state mutations. Inbound closes share the outbound disconnect
@@ -252,6 +274,9 @@ void ConnectionManager::init_server(SendspinClient* client) {
     // httpd_sess_get_ctx (set in open_callback), so its setter is a no-op stub.
     this->ws_server_->set_find_connection_callback(
         [this](int sockfd) -> std::shared_ptr<SendspinConnection> {
+            if (this->shutting_down_.load(std::memory_order_acquire)) {
+                return nullptr;
+            }
             std::lock_guard<std::mutex> lock(this->conn_ptr_mutex_);
             if (this->current_connection_ != nullptr &&
                 this->current_connection_->get_sockfd() == sockfd) {
@@ -515,9 +540,15 @@ uint32_t ConnectionManager::fnv1_hash(const char* str) {
 void ConnectionManager::setup_connection_callbacks(SendspinConnection* conn) {
     conn->on_json_message_cb = [this](SendspinConnection* c, const char* data, size_t len,
                                       int64_t timestamp) {
+        if (this->shutting_down_.load(std::memory_order_acquire)) {
+            return;
+        }
         this->client_->process_json_message(c, data, len, timestamp);
     };
     conn->on_binary_message_cb = [this](SendspinConnection* /*c*/, uint8_t* payload, size_t len) {
+        if (this->shutting_down_.load(std::memory_order_acquire)) {
+            return;
+        }
         this->client_->process_binary_message(payload, len);
     };
 }
