@@ -374,13 +374,29 @@ Hard sync resets the PI correction to nominal speed and sets a flag that switche
 
 ### Playback Progress Tracking
 
-The audio output hardware reports consumed frames via `notify_audio_played()` → `playback_progress_slot_` (a `ShadowSlot` whose merge strategy sums `frames_played` across unread updates and keeps the latest `finish_timestamp`). The sync task takes the accumulated value on every inner loop iteration to maintain an accurate `new_audio_client_playtime` estimate:
+Platform adapters report consumed frames through `notify_playout_observed()` →
+`playback_progress_slot_`. Each observation carries a stream generation,
+monotonic finish timestamp, source, quality/error bound, and underrun flag. The
+slot merge sums `frames_played` across unread updates and keeps the latest
+finish timestamp; stale generations and regressing timestamps are rejected.
+`notify_audio_played()` remains a compatibility path for synchronous callbacks
+that cannot outlive their stream.
+
+The sync task takes the accumulated value on every inner loop iteration to maintain an accurate `new_audio_client_playtime` estimate:
 
 ```cpp
 new_audio_client_playtime = last_finish_timestamp + remaining_buffered_frames_as_microseconds
 ```
 
 This feedback loop is what makes the sync error calculation accurate. With adaptive clocking enabled, the same endpoint error drives a PI controller every 250 ms. Positive error requests more output frames; negative error requests fewer. The 32-tap, 128-phase windowed-sinc ASRC applies that correction continuously rather than concentrating it in occasional inserted or removed frames. Coefficients are shared in static storage, while streaming PCM history/output uses the external-memory-preferring platform allocator on ESP.
+
+The hardware adapter defines how trustworthy this loop is. RK3308/Linux uses
+ALSA delay plus htimestamp through `QueuedPlayoutTracker`, so the feedback
+reflects the driver/device queue. The current BOX-3 implementation instead
+predicts completion from nominal 48 kHz frame duration plus a configured
+pipeline constant and marks the observation `ESTIMATED`. That fallback cannot
+directly observe individual I2S crystal drift and must not be documented or
+reported as DMA-exact timing.
 
 ## Time Synchronization
 

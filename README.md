@@ -41,6 +41,41 @@ sudo apt install avahi-daemon libnss-mdns
 The Avahi daemon provides the runtime DNS-SD service, and `libnss-mdns` lets the
 host backend resolve advertised `.local` names to IPv4 addresses.
 
+### RK3308/Linux hardware playback clock
+
+For an RK3308 speaker, use ALSA for audio output and feed its device-queue
+progress back to `PlayerRole`. The optional adapter deliberately remains outside
+the protocol core, so ESP-IDF builds do not depend on `libasound`:
+
+```bash
+sudo apt install libasound2-dev pkg-config
+cmake -S . -B build-rk3308 \
+  -DBUILD_EXAMPLES=OFF \
+  -DSENDSPIN_BUILD_ALSA_ADAPTER=ON
+cmake --build build-rk3308 --target sendspin_alsa_playout_adapter
+```
+
+The adapter combines `snd_pcm_status_get_delay()` with
+`snd_pcm_status_get_htstamp()` to calculate consumed frames in the client's
+monotonic clock domain. Reset it with the `PlayerRole` generation captured in
+`on_stream_start()`, and forward its `PlayoutObservation` callback to
+`PlayerRole::notify_playout_observed()`.
+
+Timing quality must describe the actual evidence:
+
+| Adapter evidence | Source/quality |
+| --- | --- |
+| ALSA delay plus monotonic hardware timestamp | `ALSA_HTIMESTAMP` / `BOUNDED` |
+| PortAudio DAC callback time | `PORTAUDIO_DAC_TIME` / `BOUNDED` |
+| Verified DMA descriptor/sample-counter completion | `DMA_COMPLETION` / `EXACT` |
+| Nominal sample rate plus configured pipeline delay | `ESTIMATED` / `ESTIMATED` |
+
+The current BOX-3 output belongs to the last row. It is useful for functional
+testing but cannot observe unit-to-unit I2S crystal drift as reliably as the
+RK3308 ALSA path. See
+[`examples/common/alsa_playout_adapter.md`](examples/common/alsa_playout_adapter.md)
+for wiring and recovery details.
+
 ### Discover a server
 
 ```cpp

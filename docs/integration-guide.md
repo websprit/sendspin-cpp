@@ -219,6 +219,42 @@ player.notify_playout_observed(sendspin::PlayoutObservation{
 
 Both notification methods are thread-safe and are expected to be called from an audio callback thread.
 
+#### RK3308/Linux ALSA integration
+
+The RK3308 adapter should treat ALSA as the playback-clock authority, not the
+return time of `snd_pcm_writei()`:
+
+1. Configure ALSA timestamps with `SND_PCM_TSTAMP_ENABLE` and monotonic timestamp type.
+2. After every successful or partial write, call `QueuedPlayoutTracker::submit()` with accepted frames.
+3. Poll `snd_pcm_status_get_delay()` and `snd_pcm_status_get_htstamp()`.
+4. Convert the snapshot to `PlayoutObservation` with source `ALSA_HTIMESTAMP`, quality `BOUNDED`, and a documented `error_bound_us`.
+5. On XRUN, report `underrun=true`, recover ALSA, reset queue counters, and let the sync core re-enter alignment.
+6. Capture `player.playout_generation()` in `on_stream_start()` and preserve that value through asynchronous callbacks; never relabel an old callback by reading the current generation later.
+
+`examples/common/alsa_playout_adapter.{h,cpp}` implements this sequence with a
+bounded write timeout. Build it on Linux using
+`-DSENDSPIN_BUILD_ALSA_ADAPTER=ON`; `libasound` is not a dependency of the core
+library or ESP-IDF builds.
+
+The source and quality fields remain local to the client playback path; they
+are not currently included in `client/state`. The server Web console therefore
+cannot yet display ALSA-vs-estimated timing quality without a future protocol
+extension.
+
+#### Platform capability boundary
+
+| Platform path | What is actually observed | Required classification |
+| --- | --- | --- |
+| RK3308/Linux ALSA | Driver/device queue delay at a monotonic hardware status timestamp | `ALSA_HTIMESTAMP` / `BOUNDED` |
+| Host PortAudio | DAC callback time supplied by PortAudio | `PORTAUDIO_DAC_TIME` / `BOUNDED` |
+| ESP32 with verified DMA completion | Hardware descriptor or sample-counter completion | `DMA_COMPLETION` / `EXACT` |
+| Current BOX-3 implementation | Nominal 48 kHz duration plus configured codec pipeline | `ESTIMATED` / `ESTIMATED` |
+
+The BOX-3 path therefore validates protocol flow, buffering, and correction
+behavior, but it does not measure real I2S crystal drift. RK3308 with ALSA
+delay/htimestamp is the intended path for higher-confidence long-running
+multi-speaker synchronization tests.
+
 ### MetadataRoleListener
 
 ```cpp
